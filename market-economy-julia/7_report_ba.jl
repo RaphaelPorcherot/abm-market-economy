@@ -6,12 +6,13 @@
 # Merging them is not a shortcut: the two files share an identical header —
 # same loading, same `prices_dfA`, same `prices_dfB`, same `resultB`, same
 # price/value scatter — and only diverge at the tail. Keeping them apart would
-# duplicate 200 lines to gain two figures.
+# duplicate 200 lines to gain the five figures of the BAPrices tail.
 #
-# The merge also repairs a typo: analyseBA.Rmd has a bare `c` where the export
-# call for the price/value figure should be, so that figure is displayed but
-# never written out. analyseBAPrices.Rmd has the correct
-# `export_plot(p, "price2valueAB")`. Four figures are exported in total:
+# The merge also repairs a bug: analyseBA.Rmd has a bare `c` on its own line
+# where the export call for the price/value figure should be, so that figure is
+# drawn on screen and never written out. analyseBAPrices.Rmd has the correct
+# `export_plot(p, "price2valueAB")`. Four figures are exported here, as vector
+# PDFs only — analyseBAPrices also writes a PNG, which this port does not:
 #
 #   price2valueAB   price/value ratio against sector size, A beside B
 #   priceSizeAB     price against size, A beside B
@@ -136,7 +137,8 @@ function report_ba(key_a::AbstractString, key_b::AbstractString;
     isempty(xA) || vlines!(axA, [median(xA)]; color = RGBf(0.4, 0.4, 0.4), linestyle = :dot)
     isempty(xB) || vlines!(axB, [median(xB)]; color = RGBf(0.4, 0.4, 0.4), linestyle = :dot)
     linkyaxes!(axA, axB)
-    export_figures #= && export_plot(fig, "price2valueAB"; png = true) =#
+    # PDF only. analyseBAPrices.Rmd also asks for a PNG; that branch is left off.
+    export_figures && export_plot(fig, "price2valueAB")
     figs["price2valueAB"] = fig
 
     # --- 2. price against size, A beside B --------------------------------
@@ -203,6 +205,69 @@ function report_ba(key_a::AbstractString, key_b::AbstractString;
                   yscale = log10)
     plot_by_sector!(ax, drop_nan(dfb, [:unitPrice]), :unitPrice; colors = cols, sectors = sect)
     figs["vB_unit_prices"] = fig
+
+    # --- 6 to 9. the two price measures and the two value measures ---------
+    # The tail of analyseBAPrices.Rmd, on `wide_sample <- prices_dfB %>%
+    # filter(sector %in% sample_sectors) %>% filter(t > tLim)`.
+    #
+    # This is where the realised-value benchmark earns its keep: the report
+    # puts the produced and the sold side of each pair next to each other, so
+    # the ratio plots read directly as "how far does what was sold diverge
+    # from what was made".
+    #
+    # One correction to the .Rmd: its legend labels the *production*-side
+    # series `unitValue` as « marchandises consommées » and the
+    # *consumption*-side `unitLaborEquivalent` as « marchandises produites ».
+    # The two are swapped there; they are labelled by their actual definition
+    # here.
+    samp = rb.sample_sectors
+    ws = lateB[in.(lateB.sector, Ref(Set(samp))), :]
+
+    function facet_pair(a::Symbol, b::Symbol, la, lb, title; logscale = false)
+        fig, axes = facet_figure(samp; title, xlabel = "Temps", ylabel = "Grandeur unitaire",
+                                 (logscale ? (; yscale = log10) : (;))...)
+        for s in samp
+            sub = drop_nan(ws[ws.sector .== s, :], [a, b])
+            isempty(sub) && continue
+            lines!(axes[s], sub.t, sub[!, a]; color = STEELBLUE, linewidth = 0.5)
+            lines!(axes[s], sub.t, sub[!, b]; color = FIREBRICK, linewidth = 0.5)
+        end
+        # `nbanks = 2` puts one entry per row: these labels are long enough to
+        # run off a 7-inch figure side by side.
+        Legend(fig[fld(length(samp) - 1, 3) + 2, 1:3],
+               [LineElement(color = STEELBLUE), LineElement(color = FIREBRICK)], [la, lb];
+               orientation = :horizontal, nbanks = 2, framevisible = false,
+               tellwidth = false, labelsize = 10)
+        return fig
+    end
+
+    function facet_ratio(num::Symbol, den::Symbol, title, ylabel)
+        fig, axes = facet_figure(samp; title, xlabel = "Temps", ylabel)
+        for s in samp
+            sub = drop_nan(ws[ws.sector .== s, :], [num, den])
+            isempty(sub) && continue
+            lines!(axes[s], sub.t, sub[!, num] ./ sub[!, den]; color = STEELBLUE, linewidth = 0.5)
+        end
+        return fig
+    end
+
+    n = length(samp)
+    figs["price_production_vs_consumption"] = facet_pair(:unitPrice, :unitPrice2,
+        "Prix à la production", "Prix à la consommation",
+        "Prix et valeur unitaires – $n secteurs représentatifs, t > $t_lim"; logscale = true)
+
+    figs["price_ratio"] = facet_ratio(:unitPrice2, :unitPrice,
+        "Prix unitaires – $n secteurs représentatifs, t > $t_lim",
+        "Prix à la consommation / prix à la production")
+
+    figs["two_value_measures"] = facet_pair(:unitValue, :unitLaborEquivalent,
+        "Valeur unitaire des marchandises produites",
+        "Valeur unitaire des marchandises consommées",
+        "2 calculs des valeurs unitaires – $n secteurs représentatifs, t > $t_lim"; logscale = true)
+
+    figs["value_ratio"] = facet_ratio(:unitLaborEquivalent, :unitValue,
+        "Deux mesures de la valeur – $n secteurs représentatifs, t > $t_lim",
+        "Valeur consommée / valeur produite")
 
     # --- summary table -----------------------------------------------------
     println("\n  sector   sizeA     sizeB    priceA   priceB(def)   gapA%    gapB%    gapB2%")

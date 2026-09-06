@@ -193,7 +193,9 @@ function report_b(key::AbstractString; t_lim::Int=100, t_lim_late::Int=160,
   # =========================================================================
   # Dynamiques des prix et des valeurs
   # =========================================================================
-  pdf_ = prices_table_b(r; t_lim_deflator=t_lim)
+  # The deflator is rebased on the period the .Rmd calls `tLim` at the point it
+  # computes `pib_ref` (line 1035) — by then tLim has become 160, not 100.
+  pdf_ = prices_table_b(r; t_lim_deflator=t_lim_late)
 
   for (col, title, ylab, name) in (
     (:unitPrice, "Prix unitaires", "Prix", "unit_prices"),
@@ -431,13 +433,49 @@ function report_b(key::AbstractString; t_lim::Int=100, t_lim_late::Int=160,
     orientation=:horizontal, framevisible=false, tellwidth=false)
   figs["unsold_count_vs_price"] = fig
 
+  # Second vector field, on the *share of producers left holding stock* rather
+  # than on the stock level itself. Two transcription notes:
+  #   * the .Rmd does `scatter_df[is.na(scatter_df)] <- 0` before taking the
+  #     leads, so NA becomes zero rather than dropping the row — reproduced by
+  #     the `nan_to_zero` below, and it matters at the start of each sector
+  #     where `deltaPrice_lag` is undefined;
+  #   * its title says "t > tLim" but no burn-in filter is ever applied to
+  #     `unsoldCount_df`, so the figure covers every period. Kept as written.
+  nan_to_zero(v) = [isnan(x) ? 0.0 : x for x in v]
+  # The .Rmd's x label reads « Part des agents ne parvenant pas à écouler leur
+  # production »; shortened here because `facet_figure` repeats the label under
+  # every column of the bottom row, where the full wording collides with itself.
+  fig, axes = facet_figure(samp; title="Champ de vecteurs prix / stocks (part des agents)",
+    xlabel="Part des agents en difficulté",
+    ylabel="Variation du prix")
+  for s in samp
+    a = gap_by[s]
+    b = imb_by[s]
+    x = nan_to_zero(b.unsoldRatio)
+    y = nan_to_zero(a.deltaPrice_lag)
+    length(x) < 2 && continue
+    for i in 1:(length(x)-1)
+      lines!(axes[s], [x[i], x[i] + (x[i+1] - x[i]) * scale_factor],
+        [y[i], y[i] + (y[i+1] - y[i]) * scale_factor];
+        color=(STEELBLUE, 0.6), linewidth=0.6)
+    end
+    zero_hline!(axes[s])
+    zero_vline!(axes[s])
+  end
+  figs["unsold_share_vector_field"] = fig
+
   # =========================================================================
   # Prix et division du travail
   # =========================================================================
   # « Le graphique suivant montre l'existence d'une étroite interdépendance
   #   entre la division du travail (taille du secteur, en nombre d'agents) et
   #   prix des marchandises (ici, prix constants). »
-  late_p = pdf_[pdf_.t.>t_lim, :]
+  # Everything from here on is past the .Rmd's `tLim <- 160`, so the burn-in is
+  # `t_lim_late`. The one exception is the value/size figure just below, where
+  # the .Rmd writes `filter(t>100)` literally instead of `filter(t>tLim)` —
+  # hence the second frame.
+  late_p = pdf_[pdf_.t.>t_lim_late, :]
+  late_p100 = pdf_[pdf_.t.>t_lim, :]
 
   fig = gg_figure()
   ax = gg_axis(fig, (1, 1); xlabel="Prix unitaire normalisé", ylabel="Taille du secteur",
@@ -454,7 +492,7 @@ function report_b(key::AbstractString; t_lim::Int=100, t_lim_late::Int=160,
   ax = gg_axis(fig, (1, 1); xlabel="Valeur unitaire déflatée", ylabel="Taille du secteur",
     xscale=log10, yscale=log10)
   for (k, s) in enumerate(sect)
-    sub = drop_nan(late_p[late_p.sector.==s, :], [:unitValue_deflated, :sectorSize])
+    sub = drop_nan(late_p100[late_p100.sector.==s, :], [:unitValue_deflated, :sectorSize])
     isempty(sub) && continue
     lines!(ax, sub.unitValue_deflated, sub.sectorSize; color=(cols[k], 0.2), linewidth=0.5)
     scatter!(ax, sub.unitValue_deflated, sub.sectorSize; color=(cols[k], 0.5), markersize=2)
@@ -491,7 +529,7 @@ function report_b(key::AbstractString; t_lim::Int=100, t_lim_late::Int=160,
     title="Prix maximum, minimum et moyen – $(length(samp)) secteurs représentatifs",
     xlabel="Temps", ylabel="Prix")
   for s in samp
-    sub = pdf_[(pdf_.sector.==s).&(pdf_.t.>t_lim), :]
+    sub = pdf_[(pdf_.sector.==s).&(pdf_.t.>t_lim_late), :]
     lines!(axes[s], sub.t, sub.maxPrice; color=FIREBRICK, linewidth=0.5)
     lines!(axes[s], sub.t, sub.unitPrice; color=STEELBLUE, linewidth=0.5)
     lines!(axes[s], sub.t, sub.minPrice; color=RGBf(0.2, 0.6, 0.3), linewidth=0.5)
@@ -502,7 +540,7 @@ function report_b(key::AbstractString; t_lim::Int=100, t_lim_late::Int=160,
     title="Prix maximum, minimum et moyen, en % du prix moyen",
     xlabel="Temps", ylabel="Prix (%)")
   for s in samp
-    sub = pdf_[(pdf_.sector.==s).&(pdf_.t.>t_lim), :]
+    sub = pdf_[(pdf_.sector.==s).&(pdf_.t.>t_lim_late), :]
     lines!(axes[s], sub.t, 100.0 .* sub.maxPrice ./ sub.unitPrice; color=FIREBRICK, linewidth=0.5)
     hlines!(axes[s], [100.0]; color=STEELBLUE, linewidth=0.5)
     lines!(axes[s], sub.t, 100.0 .* sub.minPrice ./ sub.unitPrice; color=RGBf(0.2, 0.6, 0.3), linewidth=0.5)
@@ -515,7 +553,7 @@ function report_b(key::AbstractString; t_lim::Int=100, t_lim_late::Int=160,
   # productionVolume / sectorSize is output per head. Plotted against
   # headcount, it says whether the sector shows increasing or decreasing
   # returns to the division of labour.
-  fig, axes = facet_figure(samp; title="Rendements sectoriels, t > $t_lim",
+  fig, axes = facet_figure(samp; title="Rendements sectoriels, t > $t_lim_late",
     xlabel="Taille du secteur", ylabel="Productivité")
   for s in samp
     sub = late_p[late_p.sector.==s, :]

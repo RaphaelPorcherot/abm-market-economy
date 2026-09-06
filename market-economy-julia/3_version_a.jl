@@ -131,15 +131,20 @@ Stops on stagnation of the imbalance index, or after `va_max_iterations`.
 Because the number of iterations is not known in advance, the macro data array
 is sized at the maximum and trimmed to the iterations actually run — which is
 the returned value's first dimension.
+
+Java counts from zero and breaks on `iter > maxIter`, so it runs iterations
+0 through `maxIter` inclusive — `maxIter + 1` of them — and only then prints
+"Max iter reached". `iter` here is Java's `iter + 1`, hence `n_max` below.
 """
 function run_version_a!(m::ModelA, population::Vector{Agent}; verbose::Bool=true)
   p = m.params
   n = p.n_sector
-  md = MacroData(p.va_max_iterations + 1, n)
+  n_max = p.va_max_iterations + 1
+  md = MacroData(n_max, n)
   iterations_run = 0
 
-  for iter in 1:(p.va_max_iterations+1)
-    if iter > p.va_max_iterations
+  for iter in 1:(n_max+1)
+    if iter > n_max
       verbose && println("Max iter reached")
       break
     end
